@@ -1,0 +1,518 @@
+---
+title: "WaterMicrobiomeCorrelation"
+output: html_document
+date: '2022-09-16'
+---
+
+```{r}
+library(qiime2R); library(phyloseq); library(ggplot2); library(fantaxtic)
+ps.dat <- qza_to_phyloseq(features="/storage/microbiome/MicrobiomeWaterCorrelation/Jacint_16S/merged_feature_table.qza",
+                taxonomy="/storage/microbiome/MicrobiomeWaterCorrelation/Jacint_16S/merged_taxonomy.qza",
+                tree="/storage/microbiome/MicrobiomeWaterCorrelation/Jacint_16S/rooted.tre.qza",
+                metadata="/storage/microbiome/MicrobiomeWaterCorrelation/Jacint_16S/merged_metadata.txt")
+
+ps.dat <- name_na_taxa(ps.dat, include_rank = F, na_label="Unknown <tax>")
+ps.dat <- tax_glom(ps.dat, taxrank = "Genus")
+ps.dat <- label_duplicate_taxa(ps.dat, tax_level="Genus")
+taxa_names(ps.dat) <- tax_table(ps.dat)[,6]
+
+ps.dat <- subset_samples(ps.dat, sample_sums(ps.dat)>1000)
+sample_names(ps.dat) <- gsub("water2020","water",as.character(sample_data(ps.dat)$samples))
+```
+
+# Ordination
+```{r}
+library(ggpubr); library(ggpmisc)
+
+ps.dat <- subset_taxa(ps.dat, !Genus%in%c("Chloroplast", "Mitochondria"))
+ps_rarefied <- rarefy_even_depth(ps.dat, rngseed = TRUE)
+
+phyloseq.water <- subset_samples(ps_rarefied, Type=="water")
+phyloseq.polyps <- subset_samples(ps_rarefied, Type=="polyp")
+
+ps_comp <- microbiome::transform(ps_rarefied, "compositional")
+ord.bray <- ordinate(ps_comp, method="NMDS", distance="bray")
+ord.jaccard <- ordinate(ps_comp, method="NMDS", distance="jaccard",binary=T)
+ord.wunifrac <- ordinate(ps_comp, method="NMDS", distance="wunifrac")
+ord.unifrac <- ordinate(ps_comp, method="NMDS", distance="unifrac")
+
+n1 <- plot_ordination(ps_comp, ord.bray, type="samples",shape="Type",color="Population")+
+  theme_bw()+geom_point(size=3)+labs(title="Bray-Curtis")+
+  scale_shape_manual(values=c("polyp"=1, "water"=17))+theme(legend.box.just = "center")
+n2 <- plot_ordination(ps_comp, ord.jaccard, type="samples",shape="Type",color="Population")+
+  theme_bw()+geom_point(size=3)+labs(title="Jaccard presence-absence")+
+  scale_shape_manual(values=c("polyp"=1, "water"=17))+theme(legend.box.just = "center")
+n3 <- plot_ordination(ps_comp, ord.wunifrac, type="samples",shape="Type",color="Population")+
+  theme_bw()+geom_point(size=3)+labs(title="Weighted UniFrac")+
+  scale_shape_manual(values=c("polyp"=1, "water"=17))+theme(legend.box.just = "center")
+n4 <- plot_ordination(ps_comp, ord.unifrac, type="samples",shape="Type",color="Population")+
+  theme_bw()+geom_point(size=3)+labs(title="Unweighted UniFrac")+
+  scale_shape_manual(values=c("polyp"=1, "water"=17))+theme(legend.box.just = "center")
+
+#ragg::agg_png(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/nmds_rarefied.png",
+#                 width=2000, height=2000, res=300)
+pdf(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/nmds_rarefied.pdf",
+                 width=7, height=7)
+ggarrange(n1,n2,n3,n4, nrow=2, ncol=2, common.legend=T, labels="AUTO")
+dev.off()
+
+dist.bray <- phyloseq::distance(ps_rarefied, method="bray")
+dist.jaccard <- phyloseq::distance(ps_rarefied, method="jaccard",binary=T)
+dist.wunifrac <- phyloseq::distance(ps_rarefied, method="wunifrac")
+dist.unifrac <- phyloseq::distance(ps_rarefied, method="unifrac")
+
+sampledf <- data.frame(sample_data(ps_rarefied))
+
+a.bray <- vegan::adonis2(dist.bray~Type*Population, data=sampledf)
+a.jaccard <- vegan::adonis2(dist.jaccard~Type*Population, data=sampledf)
+a.wunifrac <- vegan::adonis2(dist.wunifrac~Type*Population, data=sampledf)
+a.unifrac <- vegan::adonis2(dist.unifrac~Type*Population, data=sampledf)
+
+table.bray <- data.frame(Variable=c("Type","Population",
+                                    "Type:Population","Residual","Total"),
+                         R2=round(a.bray$R2,2), p=round(a.bray$`Pr(>F)`,3))
+table.bray$p[is.na(table.bray$p)] <- ""
+table.jaccard <- data.frame(Variable=c("Type","Population",
+                                    "Type:Population","Residual","Total"),
+                         R2=round(a.jaccard$R2,2), p=round(a.jaccard$`Pr(>F)`,3))
+table.jaccard$p[is.na(table.jaccard$p)] <- ""
+table.wunifrac <- data.frame(Variable=c("Type","Population",
+                                    "Type:Population","Residual","Total"),
+                         R2=round(a.wunifrac$R2,2), p=round(a.wunifrac$`Pr(>F)`,3))
+table.wunifrac$p[is.na(table.wunifrac$p)] <- ""
+table.unifrac <- data.frame(Variable=c("Type","Population",
+                                    "Type:Population","Residual","Total"),
+                         R2=round(a.unifrac$R2,2), p=round(a.unifrac$`Pr(>F)`,3))
+table.unifrac$p[is.na(table.unifrac$p)] <- ""
+
+#ragg::agg_png(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/nmds_rarefied_stats.png", width=3000, height=3000, res=300)
+pdf(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/nmds_rarefied_stats.pdf", width=10, height=10)
+ggarrange(
+  n1+annotate(geom="table", x=2,y=-2.1, label=list(table.bray),hjust=0.95,vjust=0.2),
+  n2+annotate(geom="table", x=2,y=-2, label=list(table.jaccard),hjust=0.95,vjust=0.1),
+  n3+annotate(geom="table", x=0.65,y=-0.7, label=list(table.wunifrac),hjust=0.95,vjust=0.1),
+  n4+annotate(geom="table", x=0.6,y=-0.6, label=list(table.unifrac),hjust=0.95,vjust=0.1),
+    nrow=2, ncol=2, common.legend=T, labels="AUTO")
+dev.off()
+
+ggsave(plot = n1 + scale_color_discrete(guide="none")+theme(plot.title=element_blank()), 
+       file = "/storage/microbiome/MicrobiomeWaterCorrelation/MS/nmds_Bray.pdf",
+       width=7, height=5)
+```
+
+```{r}
+library(readxl)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+coords <- read_excel("/storage/microbiome/MicrobiomeWaterCorrelation/pop_coordinates.xlsx")
+coords$Coordinates <- gsub("\n| ", "", coords$Coordinates)
+coords$N <- as.numeric(gsub("N","",sapply(strsplit(coords$Coordinates, split=";"),"[",1)))
+coords$E <- as.numeric(gsub("E","",sapply(strsplit(coords$Coordinates, split=";"),"[",2)))
+
+europe_shoreline <- ne_coastline(scale = "medium", returnclass = "sf")
+hungary <- ne_countries(country = "Hungary", returnclass = "sf", scale="large")
+
+rectangle <- data.frame(
+  xmin = 19, xmax = 22.7,
+  ymin = 45.75, ymax = 48.5)
+
+europe_hungary_inset <- ggplot() +
+  geom_sf(data = europe_shoreline, color = "black") +
+  geom_sf(data = hungary, fill = "red", color = "red") +
+  coord_sf(xlim=c(-10,40),ylim=c(30,70))+
+  geom_rect(data = rectangle, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), fill = NA, color = "black")+theme_bw()
+
+ggplot() +
+  geom_point(data = coords, aes(x = E, y = N, color = `Population ID`),size=4) +
+  # Add Hungary borders
+  geom_sf(data = hungary, fill = NA, color = "red") +
+  # Set plot limits to focus on Hungary
+  coord_sf(xlim = c(19, 22.7), ylim = c(45.75, 48.5))+
+  annotation_custom(ggplotGrob(europe_hungary_inset), xmin = 21.5, xmax = Inf, ymin = 45.5, ymax = Inf)
+
+names(coords)[1] <- "PopID"
+
+```
+
+
+# Correlation between water-polyp microbiota composition
+Mantel test - for this, the distance between multiple polyp samples from the same site are averaged 
+
+- both of these analyses are done on the following distance matrices:
+## Weighted Unifrac
+
+```{r Mantel test weighted Unifrac}
+library(qiime2R); library(broom); library(ape); library(phyloseq)
+library(ggrepel); library(ape); library(dplyr); library(ggpubr)
+
+w.data <- sample_data(phyloseq.water)
+w.data$samples <- gsub("water2020","water",w.data$samples)
+w.mat <- as.matrix(distance(phyloseq.water, "wunifrac"))
+
+sites <- gsub("/water$","",w.data$samples)
+
+p.data <- sample_data(phyloseq.polyps)
+p.mat <- as.matrix(distance(phyloseq.polyps, "wunifrac"))
+
+wp <- matrix(0, ncol=ncol(p.mat), nrow=nrow(w.mat), 
+             dimnames=list(row.names(w.mat),colnames(p.mat)))
+for(i in 1:nrow(wp)){
+  wp[i,][(gsub("/water$","",row.names(wp)[i])==gsub("/[0-9]+$","",colnames(wp)))]<-1
+}
+
+pp.mat <- matrix(NA, ncol=ncol(w.mat),nrow=nrow(w.mat), dimnames=dimnames(w.mat))
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    from<-gsub("/water$","",row.names(pp.mat)[i])
+    to<-gsub("/water$","",colnames(pp.mat)[j])
+      site.mat <- p.mat[gsub("/[0-9]+$","",row.names(p.mat))==from, 
+                   gsub("/[0-9]+$","",colnames(p.mat))==to]
+    if(identical(from, to)){
+      pp.mat[i,j]<-mean(site.mat[upper.tri(site.mat)])
+    } else {
+      pp.mat[i,j]<-mean(site.mat)
+    }
+  }
+}
+
+mantel.test.weightedUnifrac <- mantel.test(w.mat, pp.mat, graph=F)
+mantel.weightedUnifrac <- data.frame(water.dist = w.mat[upper.tri(w.mat)], polyp.dist=pp.mat[upper.tri(pp.mat)], type="weighted Unifrac")
+```
+## Unweighted Unifrac
+
+```{r Mantel test unweighted Unifrac}
+w.data <- sample_data(phyloseq.water)
+w.data$samples <- gsub("water2020","water",w.data$samples)
+w.mat <- as.matrix(distance(phyloseq.water, "unifrac"))
+
+sites <- gsub("/water$","",w.data$samples)
+
+p.data <- sample_data(phyloseq.polyps)
+p.mat <- as.matrix(distance(phyloseq.polyps, "unifrac"))
+
+wp <- matrix(0, ncol=ncol(p.mat), nrow=nrow(w.mat), 
+             dimnames=list(row.names(w.mat),colnames(p.mat)))
+for(i in 1:nrow(wp)){
+  wp[i,][(gsub("/water$","",row.names(wp)[i])==gsub("/[0-9]+$","",colnames(wp)))]<-1
+}
+
+pp.mat <- matrix(NA, ncol=ncol(w.mat),nrow=nrow(w.mat), dimnames=dimnames(w.mat))
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    from<-gsub("/water$","",row.names(pp.mat)[i])
+    to<-gsub("/water$","",colnames(pp.mat)[j])
+      site.mat <- p.mat[gsub("/[0-9]+$","",row.names(p.mat))==from, 
+                   gsub("/[0-9]+$","",colnames(p.mat))==to]
+    if(identical(from, to)){
+      pp.mat[i,j]<-mean(site.mat[upper.tri(site.mat)])
+    } else {
+      pp.mat[i,j]<-mean(site.mat)
+    }
+  }
+}
+
+mantel.test.unweightedUnifrac <- mantel.test(w.mat, pp.mat, graph=F)
+mantel.unweightedUnifrac <- data.frame(water.dist = w.mat[upper.tri(w.mat)], polyp.dist=pp.mat[upper.tri(pp.mat)], type="unweighted Unifrac")
+```
+## Bray-Curtis
+
+```{r Bray-Curtis}
+w.data <- sample_data(phyloseq.water)
+w.data$samples <- gsub("water2020","water",w.data$samples)
+w.mat <- as.matrix(distance(phyloseq.water, "bray"))
+
+sites <- gsub("/water$","",w.data$samples)
+
+p.data <- sample_data(phyloseq.polyps)
+p.mat <- as.matrix(distance(phyloseq.polyps, "bray"))
+
+wp <- matrix(0, ncol=ncol(p.mat), nrow=nrow(w.mat), 
+             dimnames=list(row.names(w.mat),colnames(p.mat)))
+for(i in 1:nrow(wp)){
+  wp[i,][(gsub("/water$","",row.names(wp)[i])==gsub("/[0-9]+$","",colnames(wp)))]<-1
+}
+
+pp.mat <- matrix(NA, ncol=ncol(w.mat),nrow=nrow(w.mat), dimnames=dimnames(w.mat))
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    from<-gsub("/water$","",row.names(pp.mat)[i])
+    to<-gsub("/water$","",colnames(pp.mat)[j])
+      site.mat <- p.mat[gsub("/[0-9]+$","",row.names(p.mat))==from, 
+                   gsub("/[0-9]+$","",colnames(p.mat))==to]
+    if(identical(from, to)){
+      pp.mat[i,j]<-mean(site.mat[upper.tri(site.mat)])
+    } else {
+      pp.mat[i,j]<-mean(site.mat)
+    }
+  }
+}
+
+mantel.test.braycurtis <- mantel.test(w.mat, pp.mat, graph=F)
+mantel.braycurtis <- data.frame(water.dist = w.mat[upper.tri(w.mat)], polyp.dist=pp.mat[upper.tri(pp.mat)], type="Bray-Curtis")
+```
+## Jaccard
+
+```{r Jaccard}
+w.data <- sample_data(phyloseq.water)
+w.data$samples <- gsub("water2020","water",w.data$samples)
+w.mat <- as.matrix(distance(phyloseq.water, "jaccard", binary=T))
+
+sites <- gsub("/water$","",w.data$samples)
+
+p.data <- sample_data(phyloseq.polyps)
+p.mat <- as.matrix(distance(phyloseq.polyps, "jaccard", binary=T))
+
+wp <- matrix(0, ncol=ncol(p.mat), nrow=nrow(w.mat), 
+             dimnames=list(row.names(w.mat),colnames(p.mat)))
+for(i in 1:nrow(wp)){
+  wp[i,][(gsub("/water$","",row.names(wp)[i])==gsub("/[0-9]+$","",colnames(wp)))]<-1
+}
+
+pp.mat <- matrix(NA, ncol=ncol(w.mat),nrow=nrow(w.mat), dimnames=dimnames(w.mat))
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    from<-gsub("/water$","",row.names(pp.mat)[i])
+    to<-gsub("/water$","",colnames(pp.mat)[j])
+      site.mat <- p.mat[gsub("/[0-9]+$","",row.names(p.mat))==from, 
+                   gsub("/[0-9]+$","",colnames(p.mat))==to]
+    if(identical(from, to)){
+      pp.mat[i,j]<-mean(site.mat[upper.tri(site.mat)])
+    } else {
+      pp.mat[i,j]<-mean(site.mat)
+    }
+  }
+}
+
+mantel.test.jaccard <- mantel.test(w.mat, pp.mat, graph=F)
+mantel.jaccard <- data.frame(water.dist = w.mat[upper.tri(w.mat)], polyp.dist=pp.mat[upper.tri(pp.mat)], type="Jaccard")
+```
+
+Plot matrix correlation
+
+```{r}
+library(ggplot2)
+df <- rbind(mantel.weightedUnifrac, mantel.unweightedUnifrac, mantel.braycurtis, mantel.jaccard)
+df$type <- factor(df$type, levels=c("Jaccard","Bray-Curtis", "unweighted Unifrac", "weighted Unifrac"))
+
+mantel.res <- data.frame(z=c(mantel.test.jaccard$z.stat, 
+                             mantel.test.braycurtis$z.stat,
+                             mantel.test.unweightedUnifrac$z.stat,
+                             mantel.test.weightedUnifrac$z.stat),
+                         p=c(mantel.test.jaccard$p, 
+                             mantel.test.braycurtis$p,
+                             mantel.test.unweightedUnifrac$p,
+                             mantel.test.weightedUnifrac$p),
+                         type=factor(c("Jaccard","Bray-Curtis", "unweighted Unifrac", "weighted Unifrac")))
+
+dat.text <- data.frame(label=paste("Mantel p =", mantel.res$p),
+                       type=factor(c("Jaccard","Bray-Curtis", "unweighted Unifrac", "weighted Unifrac")))
+
+#ragg::agg_png(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/matrix_correlation.png",
+#                 width=1800, height=1200, res=300)
+pdf(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/matrix_correlation.pdf",
+                 width=6, height=4)
+
+ggplot(df, aes(x=water.dist, y=polyp.dist))+geom_point(alpha=0.5)+
+  facet_wrap(~type)+theme_bw()+
+  xlab("Distance between water samples")+ylab("Distance between polyp samples")+
+  ylim(0.25,1.4)+
+  geom_text(
+  data    = dat.text,
+  mapping = aes(x = -Inf, y = -Inf, label = label), color="red",
+  hjust   = -0.1,
+  vjust   = -12
+)
+
+dev.off()
+  
+```
+
+
+# Sloan neutral model
+- plotting the relationship between mean abundance of an OTU across samples vs. the probability of being observed 
+
+```{r}
+library(ggplot2); library(ggpubr); library(ggrepel); library(dplyr)
+
+water.table <- otu_table(subset_samples(ps_rarefied, Type=="water"))
+polyp.table <- otu_table(subset_samples(ps_rarefied, Type=="polyp"))
+
+water.relAbund <- prop.table(water.table, 2)
+water.meanAbund<-apply(water.relAbund, 1, mean)
+water.Occurrence<-apply(water.table>0,1,sum)/ncol(water.table)
+
+polyps.relAbund<-prop.table(polyp.table, 2)
+polyps.meanAbund<-apply(polyps.relAbund, 1, mean)
+polyps.Occurrence<-apply(polyp.table>0,1,sum)/ncol(polyp.table)
+
+sloan<-(data.frame(Abund=polyps.meanAbund, Occurrence=polyps.Occurrence, 
+                  genus=taxa_names(ps_rarefied)))
+sloan<-sloan[sloan$Abund>0,]
+m<-glm(Occurrence~log10(Abund), data=sloan, family="quasibinomial")
+sloan$resid <- resid(m)
+sloan$resid_bin <- ifelse(sloan$resid>0,"positive","negative")
+
+p1 <- ggplot(sloan, aes(y=Occurrence, x=log10(Abund)))+geom_point()+
+  xlab(bquote(~Log[10] ~ "Abundance on polyps"))+
+  ylab("Occurrence on polyps")+
+  geom_smooth(method="glm",method.args=list(family="quasibinomial"))+
+  geom_text_repel(
+    data=subset(sloan, resid<quantile(resid, 0.025) | 
+                  resid>quantile(resid, 0.975)),
+    aes(label=genus,color=resid_bin),size=3,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")
+  ) + theme_bw()+theme(legend.position = "top")+
+  scale_color_manual(values=c("positive"="forestgreen","negative"="red"),name="",
+                     labels=c("Over-represented taxa","Under-represented taxa"))
+
+x <- data.frame(taxon=names(resid(m)), neutrality = resid(m))
+row.names(x)<-NULL
+
+y <- data.frame(taxon=names(water.meanAbund), waterAbund = water.meanAbund)
+row.names(y) <- NULL
+
+z <- data.frame(taxon=names(water.Occurrence), waterPrev = water.Occurrence)
+row.names(z) <- NULL
+
+xy <- left_join(x, y, by="taxon")
+xyz <- left_join(xy, z, by="taxon")
+
+p2 <- ggplot(xyz, aes(x=waterPrev, y=neutrality))+geom_point()+geom_smooth(method="lm")+
+  theme_bw()+ xlab("Occurrence in water samples")+
+  ylab("Departures from neutrality on polyps")+
+  scale_y_continuous(breaks=c(-1,0.5),labels=c("Under-represented","Over-represented"))+
+  theme(axis.text.y = element_text(angle=90, hjust=0.5))
+
+p3 <- ggplot(xyz, aes(x=log10(waterAbund), y=neutrality))+geom_point()+geom_smooth(method="lm")+
+  theme_bw()+ xlab(bquote(~Log[10] ~ "Abundance in water samples"))+
+  ylab("Departures from neutrality on polyps")+
+  scale_y_continuous(breaks=c(-1,0.5),labels=c("Under-represented","Over-represented"))+
+  theme(axis.text.y = element_text(angle=90, hjust=0.5))
+
+cor.test(xyz$waterPrev, xyz$neutrality, method="s")
+cor.test(xyz$waterAbund, xyz$neutrality, method="s")
+
+#ragg::agg_png("/storage/microbiome/MicrobiomeWaterCorrelation/MS/neutrality_rarefied_red.png",
+#              res=300, width=1800, height=1800, scaling=0.7)
+pdf("/storage/microbiome/MicrobiomeWaterCorrelation/MS/neutrality_rarefied_red.pdf", width=8, height=8)
+ggarrange(p1,ggarrange(p2,p3,nrow=1,labels=c("B","C")),nrow=2,labels=c("A","",""))
+#ggarrange(p1,p2+ylab("Departures from neutrality"), nrow=2, heights = c(2,1), 
+#          labels="AUTO", vjust=1)
+dev.off()
+```
+
+```{r}
+library(NetCoMi); library(cowplot); library(ggraph); library(tidygraph); library(grafify);
+library(igraph); library(scatterpie); library(ggforce); library(ggnewscale)
+if(FALSE){
+net_spring <- netConstruct(subset_samples(ps_rarefied,Type=="polyp"),
+                           filtTax = "highestFreq",
+                           filtTaxPar = list(highestFreq = 50),
+                           #filtSamp = "totalReads",
+                           #filtSampPar = list(totalReads = 1000),
+                           measure = "spring",
+                           measurePar = list(nlambda=10, 
+                                             rep.num=10),
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "none", 
+                           dissFunc = "signed",
+                           verbose = 2,
+                           seed = 123456)
+}
+
+sel_tax <- union(
+  top_taxa(subset_samples(ps_rarefied, Type=="polyp"),n=30)$top_taxa[,2],
+  top_taxa(subset_samples(ps_rarefied, Type=="water"),n=30)$top_taxa[,2]
+  )
+
+ps_sel <- subset_taxa(ps_rarefied, Genus%in%sel_tax)
+
+net_spring <- netConstruct(data = ps_sel,
+                           #jointPrepro = FALSE,
+                           #filtTax = "highestFreq",
+                           #filtTaxPar = list(highestFreq = 50),
+                           #filtSamp = "totalReads",
+                           #filtSampPar = list(totalReads = 1000),
+                           measure = "spring",
+                           measurePar = list(nlambda=10, 
+                                             rep.num=10),
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "none", 
+                           dissFunc = "signed",
+                           verbose = 2,
+                           seed = 123456)
+
+props_spring <- netAnalyze(net_spring, 
+                           centrLCC = TRUE,
+                           clustMethod = "cluster_fast_greedy",
+                           hubPar = "eigenvector",
+                           weightDeg = FALSE, normDeg = FALSE)
+p <- plot(props_spring, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          nodeSizeSpread = 2,
+          cexNodes = 4,
+          showTitle = FALSE,
+          labelScale = TRUE,
+          cexLabels = 5)
+
+if(FALSE){ ## using this to check that abundance values on the network graph pie
+## chart are correct. That's because the difference between taxa seems much higher 
+## there due to lack of log-transformation
+  water.abund <- taxa_sums(subset_samples(ps_sel, Type=="water"))%>%data.frame()%>%
+  tibble::rownames_to_column()%>%rename_with(~c("taxon","abund"), everything())%>%
+  mutate(type="water")
+polyp.abund <- taxa_sums(subset_samples(ps_sel, Type=="polyp"))%>%data.frame()%>%
+  tibble::rownames_to_column()%>%rename_with(~c("taxon","abund"), everything())%>%
+  mutate(type="polyp")
+all.abund <- rbind(water.abund, polyp.abund) %>%
+  mutate(cluster = as.factor(props_spring$clustering$clust1[all.abund$taxon]))
+
+ggplot(all.abund, aes(y=(abund), x=type, fill=cluster))+geom_boxplot()+facet_wrap(~cluster)+
+  ylim(0,50000)+geom_jitter()
+ggplot(all.abund, aes(y=log10(abund), x=type, fill=cluster))+geom_boxplot()+facet_wrap(~cluster)+
+  geom_jitter()
+}
+
+plot_graph <- as_tbl_graph(graph_from_adjacency_matrix(net_spring$adjaMat1,weighted=T,mode="undirected"))
+
+node.list <- plot_graph%>%activate(nodes)%>%data.frame()%>%as.vector()
+node.data <- data.frame(node=node.list$name,
+                        Cluster=as.factor(props_spring$clustering$clust1[node.list$name]),
+                        water.abund=taxa_sums(subset_samples(ps_sel, Type=="water"))[node.list$name],
+                        polyp.abund=taxa_sums(subset_samples(ps_sel, Type=="polyp"))[node.list$name])
+plot_graph <- plot_graph%>%activate(nodes)%>%left_join(node.data, by=c("name"="node"))
+
+V(plot_graph)$w <- taxa_sums(subset_samples(ps_sel, Type=="water"))[node.list$name]
+V(plot_graph)$p <- taxa_sums(subset_samples(ps_sel, Type=="polyp"))[node.list$name]
+V(plot_graph)$grp <- props_spring$clustering$clust1[node.list$name]
+plot_graph2 <- delete_vertices(plot_graph,"Candidatus_Finniella")
+
+set.seed(123)
+xy <- layout_with_kk(plot_graph2)#, weights=0.1*E(plot_graph2)$weight)
+V(plot_graph2)$x <- xy[,1]
+V(plot_graph2)$y <- xy[,2]
+V(plot_graph2)$Cluster <- as.factor(V(plot_graph2)$grp)
+plot_graph2 <- as_tbl_graph(plot_graph2)
+
+net <- ggraph(plot_graph2, "manual", x = V(plot_graph)$x, y = V(plot_graph)$y)+
+  geom_edge_fan(color="grey")+theme_graph()+
+
+  geom_mark_hull(aes(x,y,group=Cluster,fill=Cluster),
+                       concavity=8,alpha=0.25,linetype=2)+
+  scale_fill_grafify(name="Cluster:",palette="fishy")+
+  new_scale_fill()+    
+  geom_scatterpie(cols=c("p","w"),color=NA,
+                  data=as.data.frame(plot_graph2, "vertices"))+
+  scale_fill_manual(name="Type:",values=c("w"="lightblue3","p"="orange"),
+                    labels=c("w"="water","p"="polyp"))+
+  geom_node_text(aes(label=name,size=2*log10(water.abund+polyp.abund)),
+                 repel=T,force=25,force_pull=0)+guides(size="none")
+
+ggsave(file="/storage/microbiome/MicrobiomeWaterCorrelation/MS/network_rarefied_third_alternative.pdf", width=10, height=8, plot=net,device=cairo_pdf)
+```
+
